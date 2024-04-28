@@ -1,10 +1,7 @@
-import json
-import os
 import pandas as pd
-from torch.utils.data import Dataset
-import numpy as np
-from torch_geometric.data import Dataset, DataLoader
-import torch
+
+# from torch.utils.data import Dataset
+from torch_geometric.data import Dataset
 
 mapping = {
     "Low": 0,
@@ -50,7 +47,8 @@ class SkeletonDataloader(Dataset):
         self.labels_df = Y
         # Display the DataFrame
         # print(Y.columns)
-        # print(Y.query("ID == 3").drop(["ID"], axis=1).to_numpy()[0])
+        print(Y.query("ID == 3").drop(["ID"], axis=1).to_numpy()[0])
+        print(len(Y.query("ID == 3").drop(["ID"], axis=1).to_numpy()[0]))
 
     def len(self):
         return len(self.data)
