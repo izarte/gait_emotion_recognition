@@ -1,0 +1,4 @@
+psimo_reduced/
+.venv/
+.vscode/
+__pycache__/
