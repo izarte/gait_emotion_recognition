@@ -1,12 +1,14 @@
 from pathlib import Path
 from torch_geometric.data import Batch
 from torch.utils.data import DataLoader, random_split
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GraphConv, global_mean_pool
 from torch_geometric.nn import TransformerConv
 import torch.optim as optim
+from tqdm import tqdm
 
 from skeleton_dataloader import SkeletonDataloader
 
@@ -29,65 +31,164 @@ class SkeletonGNN(nn.Module):
         self.layers = nn.ModuleList(
             [GraphConv(hidden_dim, hidden_dim) for _ in range(num_layers)]
         )
-        self.skip = nn.Linear(node_features, hidden_dim * num_heads, bias=False)
+        self.skip = nn.Linear(hidden_dim, hidden_dim * num_heads, bias=False)
 
     def forward(self, data):
         x = data.x
         edge_index = data.edge_index
-        batch = data.batch
-        print("x shape:", x.shape)  # Should be [num_nodes, node_features]
-        print("edge_index shape:", edge_index.shape)  # Should be [2, num_edges]
-        x = F.relu(self.conv1(x, edge_index))
-        skip_out = self.skip(x)
-        x = F.relu(self.transformer_conv(x, edge_index) + skip_out)
-        x = F.relu(self.lin1(x))
 
+        # print(f"Initial x shape: {x.shape}, edge_index shape: {edge_index.shape}")
+
+        # First convolutional layer
+        x = F.relu(self.conv1(x, edge_index))
+
+        # Transformer convolutional layer with skip connection
+        skip_out = self.skip(x.reshape(-1, x.shape[-1]))
+        try:
+            x = F.relu(self.transformer_conv(x, edge_index) + skip_out)
+        except RuntimeError as e:
+            print(f"Error in TransformerConv: {str(e)}")
+            raise
+
+        # print(f"After transformer conv, x shape: {x.shape}")
+
+        # Linear layer after transformer convolution
+        try:
+            x = F.relu(self.lin1(x))
+        except RuntimeError as e:
+            print(f"Error in linear layer: {str(e)}")
+            raise
+
+        # print(f"After linear layer, x shape: {x.shape}")
+
+        # Additional convolutional layers
         for layer in self.layers:
             x_residual = x
-            x = F.relu(layer(x, edge_index) + x_residual)
+            try:
+                x = F.relu(layer(x, edge_index) + x_residual)
+            except RuntimeError as e:
+                print(f"Error in additional layers: {str(e)}")
+                raise
 
-        x = global_mean_pool(x, batch)
-        x = self.fc(x)
+        # print(f"After layers, x shape: {x.shape}")
+        # Global pooling
+        batch = data.batch
+        try:
+            x = global_mean_pool(x, batch)
+        except RuntimeError as e:
+            print(f"Error in pooling: {str(e)}")
+            raise
+
+        # print(f"After pooling 1, x shape: {x.shape}")
+        x = x.view(-1, 65, x.shape[1]).mean(1).float()
+        # print(f"After pooling 2, x shape: {x.shape}")
+
+        # Final linear layer
+        try:
+            x = self.fc(x).float()
+        except RuntimeError as e:
+            print(f"Error in final linear layer: {str(e)}")
+            raise
+        # print(f"After fc, final layer {x.shape}")
         return x
 
 
+# def collate_fn(batch):
+# data_list = [item[0] for item in batch]
+# for d in data_list:
+#     if not isinstance(d, Data):
+#         print(d)
+#     # if not all(isinstance(d, Data) for d in data_list):
+#     raise ValueError(
+#         "All items in data_list must be instances of torch_geometric.data.Data"
+#     )
+# batched_data = Batch.from_data_list(data_list)
+# return batched_data, [item[1] for item in batch]
+
+
 def collate_fn(batch):
-    data_list = [item[0] for item in batch]  # Collect all Data objects
-    print(data_list)
-    print(len(data_list))
-    print(type(data_list))
-    print(type(data_list[0]))
-    labels_list = [
-        torch.tensor(item[1], dtype=torch.long) for item in batch
-    ]  # Collect all labels and ensure they are tensors
+    data_list = [skeleton for item in batch for skeleton in item[0]]
 
-    # Convert the list of Data objects into a single Batch object
-    batched_data = Batch.from_data_list(data_list)
+    # Ensure valid conversion to tensors and batch the data
+    batches = []
+    for i in range(0, len(data_list), 65):  # Assuming each batch has 65 elements
+        current_batch = data_list[i : i + 65]
+        batched_data = []
+        for data in current_batch:
+            # Convert `x` and `edge_index` to tensors and ensure consistent dtypes
+            if isinstance(data.x, list) or isinstance(data.x, np.ndarray):
+                data.x = torch.tensor(np.array(data.x), dtype=torch.float32)
+            if isinstance(data.edge_index, list) or isinstance(
+                data.edge_index, np.ndarray
+            ):
+                data.edge_index = torch.tensor(np.array(data.edge_index))
+            # Check consistency of node features and edges
+            if data.x.shape[0] != len(set(data.edge_index.flatten().tolist())):
+                raise ValueError(
+                    f"Inconsistent node features and edges in data: {data}"
+                )
 
-    # Convert the list of label tensors into a single tensor
-    labels_tensor = torch.stack(labels_list)
+            batched_data.append(data)
+        batches.append(Batch.from_data_list(batched_data))
 
-    print("Batched Data:", type(batched_data), batched_data.num_nodes)
-    print("Labels Tensor:", type(labels_tensor), labels_tensor.shape)
+    # Ensure we have exactly 10 batches
+    # assert len(batches) == 10
+    batched_data = Batch.from_data_list(batches)
+    # Convert labels to a tensor
+    labels_np = np.array([item[1] for item in batch])
+    labels = torch.tensor(labels_np).float()
 
-    return batched_data, labels_tensor
+    # Check the content of `batched_data`
+    # print(f"Nodes: {batches[0].x.shape}, Edges: {batches[0].edge_index.shape}")
+    # print(f"Batch size in collate: {len(batched_data)}")
+
+    return batched_data, labels
 
 
-def train_epoch(model, loader, optimizer, criterion, device):
+def train_epoch(model, train_loader, optimizer, criterion, device):
     model.train()
-    total_loss = 0
-    for batched_skeletons, labels in loader:
-        batched_skeletons = batched_skeletons.to(device)
-        labels = labels.to(device)
+    epoch_loss = 0
 
-        optimizer.zero_grad()
-        outputs = model(batched_skeletons)  # Pass the entire batched object
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+    for i, (batched_data, labels) in enumerate(train_loader):
+        try:
+            # Ensure data is moved to the device
+            batched_data = batched_data.to(device)
+            # Ensure labels are detached from any computational graph
+            labels = labels.clone().detach().to(device)
+        except RuntimeError as e:
+            print(f"Error during batched data on batch {i}: {str(e)}")
+            raise
+        try:
+            # Log tensor shapes
+            # print(
+            #     f"Batch {i} - Input data shape: {batched_data.x.shape}, Labels shape: {labels.shape}"
+            # )
 
-        total_loss += loss.item()
-    return total_loss / len(loader)
+            # Forward pass
+            outputs = model(batched_data)
+            # print(f"Outputs shape: {outputs.shape}, Labels shape: {labels.shape}")
+        except RuntimeError as e:
+            print(f"Error during output calculation on batch {i}: {str(e)}")
+            raise
+        try:
+            # Compute loss
+            loss = criterion(outputs, labels)
+            # print(f"Loss: {loss.item()}")
+        except RuntimeError as e:
+            print(f"Error during loss on batch {i}: {str(e)}")
+            raise
+        try:
+            # Backpropagation
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+        except RuntimeError as e:
+            print(f"Error during training on batch {i}: {str(e)}")
+            raise
+
+    return epoch_loss
 
 
 def evaluate(model, loader, criterion, device):
@@ -102,8 +203,9 @@ def evaluate(model, loader, criterion, device):
             outputs = model(batched_skeletons)  # Pass the entire batched object
             loss = criterion(outputs, labels)
             total_loss += loss.item()
-            _, predicted = torch.max(outputs, dim=1)
-            correct += (predicted == labels).sum().item()
+            # _, predicted = torch.max(outputs, dim=-1)
+            # print(f"predicted dim: {outputs.shape} labels dim: {labels.shape}")
+            correct += (outputs == labels).sum().item()
 
     avg_loss = total_loss / len(loader)
     accuracy = correct / (len(loader.dataset) * labels.size(1))
@@ -162,16 +264,26 @@ def train():
     # Training loop
     num_epochs = 100
     for epoch in range(num_epochs):
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
-        val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
+        with tqdm(train_loader, unit="batch") as tepoch:
+            tepoch.set_description(f"Epoch {epoch}")
+            train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
+            val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
 
-        print(
-            f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}"
-        )
+            tepoch.set_postfix(
+                train_loss=train_loss,
+                accuracy=100.0 * val_accuracy,
+                val_loss=val_loss,
+                val_accuracy=val_accuracy,
+            )
+            # print(
+            #     f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}"
+            # )
 
-        # Update the learning rate
-        scheduler.step()
+            # Update the learning rate
+            scheduler.step()
 
+    val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
+    print("Evaluation loss: ", val_loss, " evaluation accuracy: ", val_accuracy)
     # Save the model
     torch.save(model.state_dict(), "trained_skeleton_gnn.pth")
 
