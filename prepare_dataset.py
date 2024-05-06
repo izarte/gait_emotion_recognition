@@ -1,15 +1,19 @@
-from pathlib import Path
 import json
-import numpy as np
+from pathlib import Path
+
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import torch
 from torch_geometric.data import Data, DataLoader
+
 from skeleton_dataloader import SkeletonDataloader
 
-
+# Dataset folder path
 DATASET_PATH = "psimo_reduced"
+# Labels file name inside DATASET_PATH
 LABELS_PATH = "metadata_labels_v3.csv"
+# Folder with data inside DATASET_PATH
 DATA_PATH = "semantic_data"
 
 
@@ -26,11 +30,10 @@ def convert_to_points_3d(flat_list):
 def calculate_skeleton(skeleton, verbose):
     points = convert_to_points_2d(skeleton)
     # points = convert_to_points_3d(skeleton)
-    x = np.array(
-        points
-    )  # Convert list of points into a numpy array for easier indexing
+    # Convert points to numpy array
+    x = np.array(points)
 
-    # Define connections
+    # Define edges for skeleton from AlphaPose
     edges = (
         torch.tensor(
             [
@@ -118,6 +121,7 @@ def calculate_skeleton(skeleton, verbose):
         plt.grid(True)
         plt.show()
 
+    # Create torch Data structure type
     data = Data(x=x, edge_index=edges)
     return data
 
@@ -231,9 +235,11 @@ def prepare_dataset(verbose):
     data_path = dataset_path / DATA_PATH / "skeletons"
     labels_path = dataset_path / LABELS_PATH
 
+    # Read all experiments in dataset
     experiments = [d.name for d in data_path.iterdir() if d.is_dir()]
 
     data = []
+    # Iterate over experiments reading keypoints to create skeletons
     for experiment in experiments:
         experiment_path = data_path / experiment
         json_files = [f.name for f in experiment_path.glob("*.json")]
@@ -242,6 +248,7 @@ def prepare_dataset(verbose):
             json_path = experiment_path / json_file
             data.append(load_keypoints(json_path, int(experiment)))
 
+    # Read experiment length distribution
     max_p, min_p, avg, min_crop, max_crop = get_max_min_avg(data, verbose)
     print(
         "max: ",
@@ -256,13 +263,17 @@ def prepare_dataset(verbose):
         max_crop,
     )
 
+    # Normalize distribution to get same length for each valid experiment
     normalized_size_data = normalize_distribution(data, min_crop, max_crop)
+    # Genereate and normalize skeletons based on keypoints lists
     normalized_skeletons = get_normalize_data_skeletons(normalized_size_data, verbose)
 
+    # Create a custom dataloader object to check data structure
     dataloader_path = dataset_path / "skeletons_data.pth"
-    print("Saving dataloader to: ", dataloader_path)
+    print("Saving dataset to: ", dataloader_path)
     dataset = SkeletonDataloader(data=normalized_skeletons, labels_path=labels_path)
     dataloader = DataLoader(dataset, batch_size=10, shuffle=True)
+    # Save preprocessed dataset
     torch.save(normalized_skeletons, dataloader_path)
 
 

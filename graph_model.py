@@ -1,20 +1,21 @@
 from pathlib import Path
-from torch_geometric.data import Batch
-from torch.utils.data import DataLoader, random_split
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GraphConv, global_mean_pool
-from torch_geometric.nn import TransformerConv
 import torch.optim as optim
-from tqdm import tqdm
 from sklearn.metrics import f1_score
+from torch.utils.data import DataLoader, random_split
+from torch_geometric.data import Batch
+from torch_geometric.nn import GraphConv, TransformerConv, global_mean_pool
+from tqdm import tqdm
 
 from skeleton_dataloader import SkeletonDataloader
 
-
+# Dataset folder path
 DATASET_PATH = "psimo_reduced"
+# Labels file name inside DATASET_PATH
 LABELS_PATH = "metadata_labels_v3.csv"
 
 
