@@ -13,13 +13,19 @@ LABELS_PATH = "metadata_labels_v3.csv"
 DATA_PATH = "semantic_data"
 
 
-def convert_to_points(flat_list):
+def convert_to_points_2d(flat_list):
     # Get consecutive points x y and remove third element (confidence)
     return [flat_list[i : i + 2] for i in range(0, len(flat_list), 3)]
 
 
+def convert_to_points_3d(flat_list):
+    # Get consecutive points x y z
+    return [flat_list[i : i + 3] for i in range(0, len(flat_list), 3)]
+
+
 def calculate_skeleton(skeleton, verbose):
-    points = convert_to_points(skeleton)
+    points = convert_to_points_2d(skeleton)
+    # points = convert_to_points_3d(skeleton)
     x = np.array(
         points
     )  # Convert list of points into a numpy array for easier indexing
@@ -57,28 +63,56 @@ def calculate_skeleton(skeleton, verbose):
         .t()
         .contiguous()
     )
+
     if verbose:
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="3d")
+        fig, ax = plt.subplots()
+
+        # ax = fig.add_subplot(111, projection="3d")
         # Plot nodes
-        ax.scatter(x[:, 0], x[:, 1], x[:, 2], c="blue", label="Joints")
-        ax.scatter(x[5, 0], x[5, 1], x[5, 2], c="red", label="Joints")
-        ax.scatter(x[6, 0], x[6, 1], x[6, 2], c="red", label="Joints")
+        ax.scatter(x[:, 0], x[:, 1], c="blue", label="Joints")
+        ax.scatter(x[5, 0], x[5, 1], c="red", label="Joints")
+        ax.scatter(x[6, 0], x[6, 1], c="red", label="Joints")
+
+        plot_edges = [
+            # Face
+            [0, 1],
+            [0, 2],
+            [1, 3],
+            [2, 4],
+            # Neck to shoulders
+            [0, 5],
+            [0, 6],
+            # Shoulders to arms
+            [5, 7],
+            [7, 9],
+            [6, 8],
+            [8, 10],
+            # Shoulders to body
+            [5, 11],
+            [6, 12],
+            # Body (spine)
+            [11, 12],
+            # Hips to legs
+            [11, 13],
+            [13, 15],
+            [12, 14],
+            [14, 16],
+        ]
 
         # Plot edges based on defined connections
-        for start, end in edges:
+        for start, end in plot_edges:
             if start < len(x) and end < len(x):  # Check to avoid index error
                 ax.plot(
                     [x[start, 0], x[end, 0]],
                     [x[start, 1], x[end, 1]],
-                    [x[start, 2], x[end, 2]],
+                    # [x[start, 2], x[end, 2]],
                     "k-",
                     lw=2,
                 )
 
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
+        # ax.set_zlabel("Z")
         ax.legend()
         plt.title("Skeleton Visualization")
         plt.grid(True)
@@ -105,11 +139,14 @@ def get_max_min_avg(data, verbose):
 
     distribution = np.array(distribution)
 
+    avg = np.mean(distribution)
+    standard_deviation = np.std(distribution)
     max_value = np.max(distribution)
     min_value = np.min(distribution)
-    avg = np.mean(distribution)
     min_crop = np.percentile(distribution, 25)
     max_crop = np.percentile(distribution, 85)
+
+    print(f"Average: {avg} standard deviation: {standard_deviation}")
     if verbose:
         plt.figure(figsize=(10, 6))
         sns.histplot(distribution, bins=30, kde=True, color="green")

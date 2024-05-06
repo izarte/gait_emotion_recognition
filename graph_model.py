@@ -9,6 +9,7 @@ from torch_geometric.nn import GraphConv, global_mean_pool
 from torch_geometric.nn import TransformerConv
 import torch.optim as optim
 from tqdm import tqdm
+from sklearn.metrics import f1_score
 
 from skeleton_dataloader import SkeletonDataloader
 
@@ -91,19 +92,6 @@ class SkeletonGNN(nn.Module):
             raise
         # print(f"After fc, final layer {x.shape}")
         return x
-
-
-# def collate_fn(batch):
-# data_list = [item[0] for item in batch]
-# for d in data_list:
-#     if not isinstance(d, Data):
-#         print(d)
-#     # if not all(isinstance(d, Data) for d in data_list):
-#     raise ValueError(
-#         "All items in data_list must be instances of torch_geometric.data.Data"
-#     )
-# batched_data = Batch.from_data_list(data_list)
-# return batched_data, [item[1] for item in batch]
 
 
 def collate_fn(batch):
@@ -194,22 +182,45 @@ def train_epoch(model, train_loader, optimizer, criterion, device):
 def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss = 0
-    correct = 0
+    total_correct = 0
+    all_labels = []
+    all_preds = []
     with torch.no_grad():
         for batched_skeletons, labels in loader:
             batched_skeletons = batched_skeletons.to(device)
             labels = labels.to(device)
 
-            outputs = model(batched_skeletons)  # Pass the entire batched object
+            outputs = model(batched_skeletons)
+            outputs = outputs.view(-1, outputs.size(-1))
             loss = criterion(outputs, labels)
             total_loss += loss.item()
-            # _, predicted = torch.max(outputs, dim=-1)
-            # print(f"predicted dim: {outputs.shape} labels dim: {labels.shape}")
-            correct += (outputs == labels).sum().item()
+
+            predicted = torch.round(outputs)
+
+            # Calculate correct predictions
+            correct = torch.sum(predicted == labels.float()).item()
+            total_correct += correct
+
+            # Collect all labels and predictions for F1 score computation later
+            all_labels.append(labels.cpu())
+            all_preds.append(predicted.cpu())
+
+    # Concatenate all batches for F1 score calculation
+    all_labels = torch.cat(all_labels, dim=0)
+    all_preds = torch.cat(all_preds, dim=0)
+
+    # Calculate F1 scores
+    f1_scores = []
+    for i in range(all_labels.shape[1]):
+        f1 = f1_score(all_labels[:, i], all_preds[:, i], average="macro")
+        f1_scores.append(f1)
+
+    # Average F1 scores across all outputs
+    avg_f1_score = np.mean(f1_scores)
 
     avg_loss = total_loss / len(loader)
     accuracy = correct / (len(loader.dataset) * labels.size(1))
-    return avg_loss, accuracy
+    return avg_loss, accuracy, avg_f1_score
 
 
 def train():
@@ -267,13 +278,16 @@ def train():
         with tqdm(train_loader, unit="batch") as tepoch:
             tepoch.set_description(f"Epoch {epoch}")
             train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
-            val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
+            val_loss, val_accuracy, f1_score = evaluate(
+                model, val_loader, criterion, device
+            )
 
             tepoch.set_postfix(
                 train_loss=train_loss,
                 accuracy=100.0 * val_accuracy,
                 val_loss=val_loss,
                 val_accuracy=val_accuracy,
+                val_f1=f1_score,
             )
             # print(
             #     f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}"
@@ -282,8 +296,10 @@ def train():
             # Update the learning rate
             scheduler.step()
 
-    val_loss, val_accuracy = evaluate(model, val_loader, criterion, device)
-    print("Evaluation loss: ", val_loss, " evaluation accuracy: ", val_accuracy)
+    val_loss, val_accuracy, f1_score = evaluate(model, val_loader, criterion, device)
+    print(
+        f"Evaluation loss: {val_loss} evaluation accuracy: {val_accuracy} f1 score: {f1_score}"
+    )
     # Save the model
     torch.save(model.state_dict(), "trained_skeleton_gnn.pth")
 
