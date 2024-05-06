@@ -20,7 +20,12 @@ LABELS_PATH = "metadata_labels_v3.csv"
 
 class SkeletonGNN(nn.Module):
     def __init__(
-        self, node_features, hidden_dim, num_classes, num_heads=4, num_layers=2
+        self,
+        node_features,
+        hidden_dim,
+        num_classes,
+        num_heads=4,
+        num_layers=2,
     ):
         super(SkeletonGNN, self).__init__()
         self.conv1 = GraphConv(node_features, hidden_dim)
@@ -224,6 +229,7 @@ def evaluate(model, loader, criterion, device):
 
 
 def train():
+    batch_size = 10
     dataset_path = Path(DATASET_PATH)
 
     data_saved_path = dataset_path / "skeletons_data.pth"
@@ -231,7 +237,6 @@ def train():
 
     data = torch.load(data_saved_path)
     dataset = SkeletonDataloader(data, labels_path)
-    # loader = DataLoader(dataset, batch_size=10, shuffle=True, collate_fn=collate_fn)
 
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
@@ -240,10 +245,10 @@ def train():
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_loader = DataLoader(
-        train_dataset, batch_size=10, shuffle=True, collate_fn=collate_fn
+        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=10, shuffle=False, collate_fn=collate_fn
+        val_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn
     )
 
     node_features = 2
